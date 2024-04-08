@@ -4,7 +4,7 @@ from trl import SFTTrainer
 from transformers import TrainerCallback
 from peft import get_peft_model_state_dict, set_peft_model_state_dict
 
-def get_fed_local_sft_trainer(script_args, fed_args, model, tokenizer, training_args, local_dataset, formatting_prompts_func, data_collator, global_dict, local_auxiliary, global_auxiliary):
+def get_fed_local_sft_trainer(script_args, fed_args, model, tokenizer, training_args, local_train_dataset, local_eval_dataset, formatting_prompts_func, data_collator, global_dict, local_auxiliary, global_auxiliary):
     
     if fed_args.fed_alg == 'fedprox':
         trainer = SFTTrainerFedProx(
@@ -38,7 +38,8 @@ def get_fed_local_sft_trainer(script_args, fed_args, model, tokenizer, training_
             tokenizer=tokenizer,
             args=training_args,
             max_seq_length=script_args.seq_length,
-            train_dataset=local_dataset,
+            train_dataset=local_train_dataset,
+            eval_dataset= local_eval_dataset,
             formatting_func=formatting_prompts_func,
             data_collator=data_collator,
         )

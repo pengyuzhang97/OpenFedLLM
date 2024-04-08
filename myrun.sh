@@ -1,19 +1,27 @@
 max_steps=2
-num_rounds=1
-batch_size=16
-gradient_accumulation_steps=1
+num_rounds=10
+batch_size=2
+gradient_accumulation_steps=8
 seq_length=512
 num_clients=20
 sample_clients=2
+#lora_r=32
+#lora_alpha=64   # twice of lora_r
+
 lora_r=32
 lora_alpha=64   # twice of lora_r
+
 lr=5e-5
 
+#candidate_data = ['TIGER-Lab/MathInstruct', "vicgalle/alpaca-gpt4"]
+
 # local_data_dir=""       # you may uncomment this line if your data is stored locally and include it in the python command
-dataset_name="vicgalle/alpaca-gpt4"
+#lucasmccabe-lmi/CodeAlpaca-20k, "vicgalle/alpaca-gpt4", 'TIGER-Lab/MathInstruct'
+
+dataset_name='TIGER-Lab/MathInstruct'
 dataset_sample=20000
 #model_name_or_path="meta-llama/Llama-2-7b-hf"
-model_name_or_path="../../llm_model/llama2-7b"
+model_name_or_path="../llm_model/llama2-7b"
 output_dir=./output
 
 gpu=0

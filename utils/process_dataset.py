@@ -21,6 +21,43 @@ def get_dataset(dataset_name, local_data_dir=None):
 
     return dataset
 
+
+def get_local_dataset(data_name):
+    if data_name in "lucasmccabe-lmi/CodeAlpaca-20k":
+        # dataset = load_dataset('../data/llm/CodeAlpaca-20k/data', split='train')
+        dataset = load_dataset('parquet', data_files='../data/llm/CodeAlpaca-20k/data/train-00000-of-00001-e270777bb989ac86.parquet', split='train')
+
+    if data_name in "FinGPT/fingpt-sentiment-train":
+        dataset = load_dataset('parquet',
+                               data_files='../data/llm/finegpt-sentiment-train/data/train-00000-of-00001-dabab110260ac909.parquet',
+                               split='train')
+
+    if data_name in 'medalpaca/medical_meadow_medical_flashcards':
+        dataset = load_dataset('json',
+                               data_files='../data/llm/medical_meadow_medical_flashcards/medical_meadow_wikidoc_medical_flashcards.json',
+                               split='train')
+
+    return dataset
+
+
+def modified_process_sft_data(dataset_name, dataset, dataset_sample):
+    if dataset_name in "lucasmccabe-lmi/CodeAlpaca-20k" or dataset_name in "FinGPT/fingpt-sentiment-train":
+        dataset = dataset.map(alpaca_format, remove_columns=['input', 'output'],
+                              desc=f"Preprocessing {dataset_name} for unified format.")
+
+    elif dataset_name in 'medalpaca/medical_meadow_medical_flashcards':       # TODO: 'lavita/ChatDoctor-HealthCareMagic-100k'. not sure whether to discard the instruction.
+        dataset = dataset.remove_columns(['instruction'])
+        dataset = dataset.rename_column("input", "instruction")
+        dataset = dataset.rename_column("output", "response")
+
+    dataset = dataset.shuffle(seed=2023)
+    if dataset_sample:
+        num_sample = min(len(dataset), dataset_sample)
+        train_dataset = dataset.select(range(num_sample))
+        remaining_dataset = dataset.select(range(num_sample, len(dataset)))
+    print(f">> ===== After processing, Dataset {dataset_name} has {len(train_dataset)} examples, Remaining_Dataset has {len(remaining_dataset)} =====")
+    return train_dataset, remaining_dataset
+
 def process_sft_dataset(dataset_name, dataset, dataset_sample):
     if dataset_name in ["lucasmccabe-lmi/CodeAlpaca-20k", "yahma/alpaca-cleaned", "FinGPT/fingpt-sentiment-train"]:
         dataset = dataset.map(alpaca_format, remove_columns=['input', 'output'], desc=f"Preprocessing {dataset_name} for unified format.")
@@ -50,9 +87,10 @@ def process_sft_dataset(dataset_name, dataset, dataset_sample):
     dataset = dataset.shuffle(seed=2023)
     if dataset_sample:
         num_sample = min(len(dataset), dataset_sample)
-        dataset = dataset.select(range(num_sample))
-    print(f">> ===== After processing, Dataset {dataset_name} has {len(dataset)} examples. =====")
-    return dataset
+        train_dataset = dataset.select(range(num_sample))
+        remaining_dataset = dataset.select(range(num_sample, len(dataset)))
+    print(f">> ===== After processing, Dataset {dataset_name} has {len(train_dataset)} examples, Remaining_Dataset has {len(remaining_dataset)} =====")
+    return train_dataset, remaining_dataset
 
 def alpaca_format(example):
     if example['input'] == "":
@@ -131,3 +169,12 @@ def split_hh(example, template_name="vicuna_v1.1"):
     example["chosen"] = example["chosen"][len(common_prefix) - 1 :]     # -1 to include the space in the front.
     example["rejected"] = example["rejected"][len(common_prefix) - 1 :]
     return example
+
+
+
+# if __name__ == "__main__":
+#     data_name = 'CodeAlpaca-20k'
+#
+#     data_set = get_local_dataset(data_name)
+#
+#     print('done')

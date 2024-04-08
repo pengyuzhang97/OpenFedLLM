@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from transformers import HfArgumentParser, TrainingArguments, BitsAndBytesConfig
-from peft import LoraConfig
+from peft import LoraConfig, LoftQConfig
 
 from transformers.utils.quantization_config import GPTQConfig
 
@@ -54,13 +54,17 @@ class ScriptArguments:
     gradient_accumulation_steps: Optional[int] = field(
         default=2, metadata={"help": "the number of gradient accumulation steps"}
     )
-    load_in_8bit: Optional[bool] = field(default=True, metadata={"help": "load the model in 8 bits precision"})
+    load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
     peft_lora_r: Optional[int] = field(default=8, metadata={"help": "the r parameter of the LoRA adapters"})
     peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
+
+    use_loftq: Optional[bool] = field(default=True, metadata={"help": "Wether to use loftq or not to train adapters"})
+    loftq_bits: Optional[int] = field(default=4, metadata={"help": "the bitrate"})
+    loftq_num_iters: Optional[int] = field(default=1, metadata={"help": "the # of iterations to set"})
 
     # target_modules: List = field(default_factory=lambda: ["q_proj","k_proj", "v_proj"])
 
@@ -85,19 +89,34 @@ script_args, fed_args = parser.parse_args_into_dataclasses()
 
 # ===== Define the LoraConfig =====
 # lora_target_modules = ["q_proj","k_proj", "v_proj"]
-# lora_target_modules = ["q_proj","k_proj", "v_proj", 'o_proj']
+lora_target_modules = ["q_proj","k_proj", "v_proj", 'o_proj']
 # lora_target_modules = ["q_proj"]
-lora_target_modules = ["q_proj", "k_proj", "v_proj", 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+# lora_target_modules = ["q_proj", "k_proj", "v_proj", 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
 
 if script_args.use_peft:
-    peft_config = LoraConfig(
-        r=script_args.peft_lora_r,
-        lora_alpha=script_args.peft_lora_alpha,
-        target_modules=lora_target_modules,
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
+
+    if script_args.use_loftq:
+        loftq_config = LoftQConfig(loftq_bits=script_args.loftq_bits, loftq_iter=script_args.loftq_num_iters)
+        peft_config = LoraConfig(
+            r=script_args.peft_lora_r,
+            lora_alpha=script_args.peft_lora_alpha,
+            target_modules=lora_target_modules,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+            init_lora_weights='loftq',
+            loftq_config=loftq_config
+        )
+
+    else:
+        peft_config = LoraConfig(
+            r=script_args.peft_lora_r,
+            lora_alpha=script_args.peft_lora_alpha,
+            target_modules=lora_target_modules,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
 else:
     peft_config = None
 
@@ -135,9 +154,9 @@ def get_model_config(script_args):
         device_map = {"": Accelerator().local_process_index}
         torch_dtype = torch.bfloat16
     else:
-        device_map = None
+        device_map = {"": Accelerator().local_process_index}
         quantization_config = None
-        torch_dtype = None
+        torch_dtype = torch.bfloat16
     return device_map, quantization_config, torch_dtype
 
 def get_model_config_GPTQ(script_args):
