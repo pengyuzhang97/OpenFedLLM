@@ -21,10 +21,10 @@ from trl import SFTTrainer
 
 from collections import OrderedDict
 
-import sys
+# from prune import generator
+from prune.pruners import *
 
-
-sys.setrecursionlimit(1000000)
+import matplotlib.pyplot as plt
 
 
 # ===== Define the arguments =====
@@ -37,9 +37,9 @@ print(script_args, fed_args)
 dataset = get_local_dataset(script_args.dataset_name)
 dataset, remain_dataset = modified_process_sft_data(script_args.dataset_name, dataset, script_args.dataset_sample)
 
-# # ===== Load the global general dataset =====
-# global_general_dataset = get_local_dataset('alpaca-gpt4')
-# global_general_dataset = modified_process_sft_general_dataset('alpaca-gpt4', global_general_dataset, num_sample=100)
+# ===== Load the global general dataset =====
+global_general_dataset = get_local_dataset('alpaca-gpt4')
+global_general_dataset = modified_process_sft_general_dataset('alpaca-gpt4', global_general_dataset, num_sample=100)
 
 
 
@@ -51,6 +51,36 @@ dataset, remain_dataset = modified_process_sft_data(script_args.dataset_name, da
 # ===== Split the dataset into clients =====
 local_datasets = split_dataset(fed_args, script_args, dataset)
 sample_num_list = [len(local_datasets[i]) for i in range(fed_args.num_clients)]
+
+
+# # ===== Define the tokenizer =====
+# tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path, use_fast=False, padding_side="right")
+# if tokenizer.pad_token is None:
+#     tokenizer.pad_token = tokenizer.unk_token  # following vicuna
+#
+# # ===== Define the formatting function (cater to TRL SFTTrainer)=====
+# formatting_prompts_func, response_template = get_formatting_prompts_func(script_args.template, tokenizer.eos_token)
+# response_template_ids = tokenizer.encode(response_template, add_special_tokens=False)[
+#                         2:]  # Now we have it like in the dataset texts: `[2277, 29937, 4007, 22137, 29901]` for Llama2
+# data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
+
+
+
+
+
+
+
+def get_score(sft_instance, model):
+
+    train_dataloader = sft_instance.get_train_dataloader()
+
+    scorer = IterSNIP_no_mask(model)
+
+    score_dict = scorer.score_llm_wo_mask(sft_instance, model, train_dataloader)
+
+    return score_dict
+
+
 
 
 
@@ -171,7 +201,7 @@ if tokenizer.pad_token is None:
 
 # ===== Define the formatting function (cater to TRL SFTTrainer)=====
 formatting_prompts_func, response_template = get_formatting_prompts_func(script_args.template, tokenizer.eos_token)
-response_template_ids = tokenizer.encode(response_template)[
+response_template_ids = tokenizer.encode(response_template, add_special_tokens=False)[
                         2:]  # Now we have it like in the dataset texts: `[2277, 29937, 4007, 22137, 29901]` for Llama2
 data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
 
@@ -254,7 +284,63 @@ for round in tqdm(range(fed_args.num_rounds)):
         # ===== Save local model =====
         # currently save the final global model for further evaluation
         # if (round + 1) % fed_args.num_rounds == 1:
-        # trainer.save_model(os.path.join(script_args.output_dir, f"local-{client}-checkpoint-{round + 1}"))
+        trainer.save_model(os.path.join(script_args.output_dir, f"local-{client}-checkpoint-{round + 1}"))
+
+        score_dict = get_score(trainer, model)
+
+
+
+        # store the tensors of the values in norm_score_dict in a list. Then rank the list and save the rank in a new list
+        score_list = []
+
+        score_list  = torch.cat([torch.flatten(v.cpu()) for  k, v in score_dict.items()])
+
+        # print(score_list)
+
+        sorted_score_list = sorted(score_list, reverse=False)
+
+
+        # histgram of the scores
+        plt.figure()
+        plt.hist(score_list, bins=100)
+        plt.show()
+
+
+        top_10_percent_score = sorted_score_list[int(len(sorted_score_list) * 0.1)]
+
+        top_10_index = torch.tensor(score_list) > top_10_percent_score
+        top_10_num_ratio = torch.sum(torch.tensor(score_list) > top_10_percent_score) / len(score_list)
+
+
+        # print(top_10_percent_score)
+
+        # I need to know the number of top 5% scores
+
+        top_5_percent_score = sorted_score_list[int(len(sorted_score_list) * 0.05)]
+
+        # print(top_5_percent_score)
+
+
+        top_1_percent_score = sorted_score_list[int(len(sorted_score_list) * 0.01)]
+
+        # I need to know the number of top 1% scores
+        # print(top_1_percent_score)
+
+        # I need to know the number of top 0.1% scores
+
+        top_0_1_percent_score = sorted_score_list[int(len(sorted_score_list) * 0.001)]
+
+        # print(top_0_1_percent_score)
+
+
+        #
+        # print(sorted_score_list)
+
+        # print(score_dict)
+
+        # print(score_list)
+
+
 
         if script_args.use_loc_fh:
             # ===== Save results and  Operate handles =====
@@ -281,9 +367,6 @@ for round in tqdm(range(fed_args.num_rounds)):
 
         print('Done')
 
-
-
-
     # avg of local loss for this current round and save
     if fed_args.per_tuning:
         avg_local_eval_loss.append(np.mean(eval_loss))
@@ -301,13 +384,9 @@ for round in tqdm(range(fed_args.num_rounds)):
     set_peft_model_state_dict(model, global_dict)  # Update global model
 
     # glo_eval_loss = global_eval(model, remain_dataset)
-    # every 10 rounds, evaluate the global model on the global dataset
-    if (round + 1) % 10 == 0:
-        # if script_args.use_glob_fh:
-        #     glo_eval_loss = global_eval(model, global_general_dataset, forward_hook=True)   # eval on global general data
-        glo_eval_loss = global_eval(model, remain_dataset, forward_hook=False)
-        print('Global Loss in Round{} is {}'.format(round, glo_eval_loss))
-        global_loss.append(glo_eval_loss)
+
+    if script_args.use_glob_fh:
+        glo_eval_loss = global_eval(model, global_general_dataset, forward_hook=True)
 
     # global_loss.append(glo_eval_loss)
     # print('Global Loss in Round{} is {}'.format(round,glo_eval_loss))
@@ -316,8 +395,7 @@ for round in tqdm(range(fed_args.num_rounds)):
     # ===== Save the global model =====
     # currently save the final global model for further evaluation
     # if (round + 1) % fed_args.num_rounds == 1:
-    if (round + 1) % 10 == 0:
-        trainer.save_model(os.path.join(script_args.output_dir, f"checkpoint-{round + 1}"))
+    trainer.save_model(os.path.join(script_args.output_dir, f"checkpoint-{round + 1}"))
 
     np.save(os.path.join(script_args.output_dir, "training_loss.npy"), np.array(training_loss))
     np.save(os.path.join(script_args.output_dir, "global_loss.npy"), np.array(global_loss))

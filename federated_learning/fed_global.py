@@ -4,13 +4,26 @@ import torch
 import numpy as np
 
 
-def Q_Deq_SymQ(input, num_bits):
 
-    max_input = (
-        torch.max(torch.abs(input), dim=-1, keepdim=True)[0]
-        .expand_as(input)
-        .detach()
-    )
+
+
+
+
+def Q_Deq_SymQ(input, num_bits, my_per_channel=False):
+
+    if not my_per_channel:
+        max_input = (
+            torch.max(torch.abs(input), dim=-1, keepdim=True)[0]
+            .expand_as(input)
+            .detach()
+        )
+    else:
+
+        max_input = (
+            torch.max(torch.abs(input), dim=0, keepdim=True)[0]
+            .expand_as(input)
+            .detach()
+        )
 
     s = (2 ** (num_bits - 1) - 1) / (max_input + 1e-6)
 
@@ -20,21 +33,23 @@ def Q_Deq_SymQ(input, num_bits):
 
     return output
 
-def DeSymQ(input, num_bits):
 
-    max_input = (
-        torch.max(torch.abs(input), dim=-1, keepdim=True)[0]
-        .expand_as(input)
-        .detach()
-    )
 
-    s = (2 ** (num_bits - 1) - 1) / (max_input + 1e-6)
-
-    # q_output = torch.round(input * s)
-
-    output = input.div(s + 1e-6)
-
-    return output
+# def DeSymQ(input, num_bits):
+#
+#     max_input = (
+#         torch.max(torch.abs(input), dim=-1, keepdim=True)[0]
+#         .expand_as(input)
+#         .detach()
+#     )
+#
+#     s = (2 ** (num_bits - 1) - 1) / (max_input + 1e-6)
+#
+#     # q_output = torch.round(input * s)
+#
+#     output = input.div(s + 1e-6)
+#
+#     return output
 
 
 
@@ -114,7 +129,7 @@ def get_clients_this_round(fed_args, round):
             clients_this_round = sorted(random.sample(range(fed_args.num_clients), fed_args.sample_clients))
     return clients_this_round
 
-def global_aggregate(fed_args, global_dict, local_dict_list,
+def global_aggregate( script_args, fed_args, global_dict, local_dict_list,
                      sample_num_list, clients_this_round, round_idx,
                      proxy_dict=None, opt_proxy_dict=None, auxiliary_info=None, overall_drop_rate=None):
     sample_this_round = sum([sample_num_list[client] for client in clients_this_round])
@@ -196,28 +211,125 @@ def global_aggregate(fed_args, global_dict, local_dict_list,
         # real_global_dict = copy.deepcopy(global_dict)
 
 
-        # local_to_server
-        for client in clients_this_round:
-            for k, v in local_dict_list[client].items():
-                v.data = Q_Deq_SymQ(v, num_bits=4)
 
-                # rescaled_mask = generate_scaled_binary_mask(v, overall_drop_rate)
-                # v.data *= rescaled_mask.to(v.device)
-                # del rescaled_mask
-        print('Client-to-Global SymQ and DeSymQ are Done')
+        if script_args.quantize:
+            # local_to_server
+            for client in clients_this_round:
+                for k, v in local_dict_list[client].items():
+                    if 'lora_A' in k:
+                        v.data = Q_Deq_SymQ(v, num_bits=8)
+                    else:
+                        v.data = Q_Deq_SymQ(v, num_bits=8)
+
+                    # rescaled_mask = generate_scaled_binary_mask(v, overall_drop_rate)
+                    # v.data *= rescaled_mask.to(v.device)
+                    # del rescaled_mask
+            print('Client-to-Global SymQ and DeSymQ are Done')
 
 
         for key in global_dict.keys():
             global_dict[key] = sum([local_dict_list[client][key] * sample_num_list[client] / sample_this_round for client in clients_this_round])
 
 
-        # server to local
-        for k, v in global_dict.items():
-            v.data = Q_Deq_SymQ(v, num_bits=4)
-        print('Global-to-Client SymQ and DeSymQ are Done')
+        # # server to local
+        # for k, v in global_dict.items():
+        #     if 'lora_A' in k:
+        #         v.data = Q_Deq_SymQ(v, num_bits=4)
+        #     else:
+        #         v.data = Q_Deq_SymQ(v, num_bits=4)
+        # print('Global-to-Client SymQ and DeSymQ are Done')
 
-    
+
     return global_dict, global_auxiliary
+
+
+def global_aggregate_hybrid(script_args, fed_args, hetero_local_dict_list,
+                     sample_num_list, clients_this_round, overall_drop_rate=None, method='concat'):
+    # method svd
+    # method zero-padding
+
+    sample_this_round = sum([sample_num_list[client] for client in clients_this_round])
+
+    # print('Start dropout and rescale')
+    # print('Dropout on A')
+    # for client in clients_this_round:
+    #     for k, v in local_dict_list[client].items():
+    #         # print('Dropout on ', k)
+    #         if 'lora_A' in k:
+    #             # print('Dropout on ', k)
+    #             rescaled_mask = generate_scaled_binary_mask(v, overall_drop_rate)
+    #             v.data *= rescaled_mask.to(v.device)
+    #             del rescaled_mask
+    # print('Dropout and rescale Done')
+
+    # do i need to cancel out the arithmatic addtion?
+
+    # for client in clients_this_round:
+    #     with torch.no_grad():
+    #         flat_weights = torch.nn.utils.parameters_to_vector(local_dict_list[client].values())
+    #         rescaled_mask = generate_scaled_binary_mask_for_vector(flat_weights, overall_drop_rate)
+    #         flat_weights.data *= rescaled_mask.to(flat_weights.device)
+    #         del rescaled_mask
+    #
+    #         # new_weights = torch.nn.utils.vector_to_parameters(flat_weights, local_dict_list[client].values())
+    #
+    #         torch.nn.utils.vector_to_parameters(flat_weights, local_dict_list[client].values())
+    #
+    #         # for p, w in zip(local_dict_list[client].values(), flat_weights):
+    #         #     p.copy_(w)
+
+    # for key in global_dict.keys():
+    #     global_dict[key] = sum([local_dict_list[client][key] * sample_num_list[client] / sample_this_round for client in clients_this_round])
+    #
+    # real_global_dict = copy.deepcopy(global_dict)
+
+    # local_to_server
+    if script_args.quantize:
+        for client in clients_this_round:
+            for k, v in hetero_local_dict_list[client].items():
+                if 'lora_A' in k:
+                    v.data = Q_Deq_SymQ(v, num_bits=8)
+                else:
+                    v.data = Q_Deq_SymQ(v, num_bits=8)
+
+                # rescaled_mask = generate_scaled_binary_mask(v, overall_drop_rate)
+                # v.data *= rescaled_mask.to(v.device)
+                # del rescaled_mask
+        print('Client-to-Global SymQ and DeSymQ are Done')
+
+    global_dict = copy.deepcopy(hetero_local_dict_list[clients_this_round[0]])
+
+    # method SVD
+    if method == 'concat':
+        for key in global_dict.keys():
+            # concatenate in the loop
+            id = 0
+            for client in clients_this_round:
+                if id == 0:
+                    global_dict[key] = hetero_local_dict_list[client][key] * np.sqrt (sample_num_list[client] / sample_this_round)
+                    id += 1
+                else:
+                    if global_dict[key].shape[0] < global_dict[key].shape[1]:
+                        cat_dim = 0
+                    else:
+                        cat_dim = 1
+                    global_dict[key] = torch.cat( (global_dict[key],
+                                                 hetero_local_dict_list[client][key] * np.sqrt(sample_num_list[client] / sample_this_round)), dim=cat_dim)
+
+    # TODO Quantization for dispatching should not be done here
+    # quantization
+    # # server to local
+    # for k, v in global_dict.items():
+    #     if 'lora_A' in k:
+    #         v.data = Q_Deq_SymQ(v, num_bits=8)
+    #     else:
+    #         v.data = Q_Deq_SymQ(v, num_bits=8)
+    # print('Global-to-Client SymQ and DeSymQ are Done')
+
+    return global_dict
+
+
+
 
 
 # P is the probability of true

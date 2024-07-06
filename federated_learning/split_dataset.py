@@ -13,11 +13,26 @@ def split_dataset(fed_args, script_args, dataset):
 # seems that this function can be combined with a data selection mechanism?
 # i'm going to fix the number of local data
 def get_dataset_this_round(dataset, round, fed_args, script_args):
-    num2sample = script_args.batch_size * script_args.gradient_accumulation_steps * script_args.max_steps
-    num2sample = min(num2sample, len(dataset))
-    random.seed(round)
-    random_idx = random.sample(range(0, len(dataset)), num2sample)
-    dataset_this_round = dataset.select(random_idx)
 
-    # return dataset_this_round
-    return dataset_this_round
+    if script_args.max_steps == -1:
+        return dataset
+    else:
+        num2sample = script_args.batch_size * script_args.gradient_accumulation_steps * script_args.max_steps
+        num2sample = min(num2sample, len(dataset))
+        random.seed(round)
+        random_idx = random.sample(range(0, len(dataset)), num2sample)
+        dataset_this_round = dataset.select(random_idx)
+
+        # return dataset_this_round
+        return dataset_this_round
+
+
+# def get_dataset_this_round(dataset, round, fed_args, script_args):
+#     num2sample = script_args.batch_size * script_args.gradient_accumulation_steps * script_args.max_steps
+#     num2sample = min(num2sample, len(dataset))
+#     random.seed(round)
+#     random_idx = random.sample(range(0, len(dataset)), num2sample)
+#     dataset_this_round = dataset.select(random_idx)
+#
+#     # return all dataset no matter what value the max_step has.
+#     return dataset

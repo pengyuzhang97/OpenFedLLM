@@ -25,19 +25,32 @@ def get_dataset(dataset_name, local_data_dir=None):
 def get_local_dataset(data_name):
     if data_name in "lucasmccabe-lmi/CodeAlpaca-20k":
         # dataset = load_dataset('../data/llm/CodeAlpaca-20k/data', split='train')
-        dataset = load_dataset('parquet', data_files='../data/llm/CodeAlpaca-20k/data/train-00000-of-00001-e270777bb989ac86.parquet', split='train')
+        dataset = load_dataset('parquet',
+                               data_files='../data/llm/CodeAlpaca-20k/data/train-00000-of-00001-e270777bb989ac86.parquet', split='train')
 
     if data_name in "FinGPT/fingpt-sentiment-train":
         dataset = load_dataset('parquet',
-                               data_files='../data/llm/finegpt-sentiment-train/data/train-00000-of-00001-dabab110260ac909.parquet',
+                               data_files='../data/llm/fingpt-sentiment-train/data/train-00000-of-00001-dabab110260ac909.parquet',
                                split='train')
 
     if data_name in 'medalpaca/medical_meadow_medical_flashcards':
         dataset = load_dataset('json',
                                data_files='../data/llm/medical_meadow_medical_flashcards/medical_meadow_wikidoc_medical_flashcards.json',
                                split='train')
+    if data_name in 'alpaca-gpt4':
+        dataset = load_dataset('parquet',
+                                  data_files='../data/llm/alpaca-gpt4/train-00000-of-00001-6ef3991c06080e14.parquet',
+                                  split='train')
+
+    if data_name in 'TIGER-Lab/MathInstruct':
+        dataset = load_dataset('json',
+                               data_files='../data/llm/MathInstruct/MathInstruct.json',
+                               split='train')
+
+    # if data_name in ''
 
     return dataset
+
 
 
 def modified_process_sft_data(dataset_name, dataset, dataset_sample):
@@ -50,13 +63,38 @@ def modified_process_sft_data(dataset_name, dataset, dataset_sample):
         dataset = dataset.rename_column("input", "instruction")
         dataset = dataset.rename_column("output", "response")
 
+    elif dataset_name in ["TIGER-Lab/MathInstruct"]:
+        df = pd.DataFrame(dataset)
+        df = df.drop_duplicates(subset=['instruction'])
+        dataset = datasets.Dataset.from_pandas(df)
+        dataset = dataset.rename_column("output", "response")
+        dataset = dataset.remove_columns(['source'])
+
     dataset = dataset.shuffle(seed=2023)
     if dataset_sample:
         num_sample = min(len(dataset), dataset_sample)
+        if dataset_name in "lucasmccabe-lmi/CodeAlpaca-20k":
+            num_sample = 16000  # 16000 for CodeAlpace global evaulation
         train_dataset = dataset.select(range(num_sample))
         remaining_dataset = dataset.select(range(num_sample, len(dataset)))
     print(f">> ===== After processing, Dataset {dataset_name} has {len(train_dataset)} examples, Remaining_Dataset has {len(remaining_dataset)} =====")
     return train_dataset, remaining_dataset
+
+
+def modified_process_sft_general_dataset(dataset_name, dataset, num_sample=None, seed=2024):
+    if dataset_name in 'alpaca-gpt4':
+        dataset = dataset.map(alpaca_format, remove_columns=['input', 'output', 'text'],
+                              desc=f"Preprocessing {dataset_name} for unified format.")
+    dataset = dataset.shuffle(seed=seed)
+
+    if num_sample is not None:
+        num_sample = min(len(dataset), num_sample)
+        train_dataset = dataset.select(range(num_sample))
+        remaining_dataset = dataset.select(range(num_sample, len(dataset)))
+        print(f">> ===== After processing, Dataset {dataset_name} has {len(train_dataset)} examples, Remaining_Dataset has {len(remaining_dataset)} =====")
+
+    return train_dataset
+
 
 def process_sft_dataset(dataset_name, dataset, dataset_sample):
     if dataset_name in ["lucasmccabe-lmi/CodeAlpaca-20k", "yahma/alpaca-cleaned", "FinGPT/fingpt-sentiment-train"]:
@@ -64,7 +102,8 @@ def process_sft_dataset(dataset_name, dataset, dataset_sample):
     elif dataset_name in ["WizardLM/WizardLM_evol_instruct_70k"]:
         dataset = dataset.rename_column("output", "response")
     elif dataset_name in ["tatsu-lab/alpaca", "vicgalle/alpaca-gpt4", "gbharti/finance-alpaca"]:
-        dataset = dataset.map(alpaca_format, remove_columns=['input', 'output', 'text'], desc=f"Preprocessing {dataset_name} for unified format.")
+        dataset = dataset.map(alpaca_format, remove_columns=['input', 'output', 'text'],
+                              desc=f"Preprocessing {dataset_name} for unified format.")
     elif dataset_name in ["TIGER-Lab/MathInstruct"]:
         df = pd.DataFrame(dataset)
         df = df.drop_duplicates(subset=['instruction'])
