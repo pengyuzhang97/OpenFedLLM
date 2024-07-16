@@ -210,6 +210,25 @@ def global_aggregate( script_args, fed_args, global_dict, local_dict_list,
         #
         # real_global_dict = copy.deepcopy(global_dict)
 
+        # clients_this_round
+        #
+        # temp_for_0 = []
+        # temp_for_1 = []
+        # for k in local_dict_list[clients_this_round[0]].keys():
+        #     if 'lora_A' in k:
+        #         bk = k.replace('lora_A', 'lora_B')
+        #
+        #         temp0 = local_dict_list[clients_this_round[0]][bk].data @ local_dict_list[clients_this_round[0]][k].data
+        #         norm_2 = torch.norm(temp0, p=2)
+        #         temp_for_0.append(norm_2)
+        #
+        #         temp1 = local_dict_list[clients_this_round[1]][bk].data @ local_dict_list[clients_this_round[1]][k].data
+        #         norm_2 = torch.norm(temp1, p=2)
+        #         temp_for_1.append(norm_2)
+        #
+        #
+        # numpy_list_0 = [tensor.cpu().numpy() for tensor in temp_for_0]
+        # numpy_list_1 = [tensor.cpu().numpy() for tensor in temp_for_1]
 
 
         if script_args.quantize:
@@ -217,9 +236,9 @@ def global_aggregate( script_args, fed_args, global_dict, local_dict_list,
             for client in clients_this_round:
                 for k, v in local_dict_list[client].items():
                     if 'lora_A' in k:
-                        v.data = Q_Deq_SymQ(v, num_bits=8)
+                        v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
                     else:
-                        v.data = Q_Deq_SymQ(v, num_bits=8)
+                        v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
 
                     # rescaled_mask = generate_scaled_binary_mask(v, overall_drop_rate)
                     # v.data *= rescaled_mask.to(v.device)

@@ -70,11 +70,16 @@ def modified_process_sft_data(dataset_name, dataset, dataset_sample):
         dataset = dataset.rename_column("output", "response")
         dataset = dataset.remove_columns(['source'])
 
+    elif dataset_name in 'alpaca-gpt4':
+        dataset = dataset.map(alpaca_format, remove_columns=['input', 'output', 'text'],
+                              desc=f"Preprocessing {dataset_name} for unified format.")
+
     dataset = dataset.shuffle(seed=2023)
     if dataset_sample:
         num_sample = min(len(dataset), dataset_sample)
         if dataset_name in "lucasmccabe-lmi/CodeAlpaca-20k":
             num_sample = 16000  # 16000 for CodeAlpace global evaulation
+        num_sample = 16000
         train_dataset = dataset.select(range(num_sample))
         remaining_dataset = dataset.select(range(num_sample, len(dataset)))
     print(f">> ===== After processing, Dataset {dataset_name} has {len(train_dataset)} examples, Remaining_Dataset has {len(remaining_dataset)} =====")

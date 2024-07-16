@@ -28,6 +28,8 @@ import sys
 
 from datasets import Dataset
 
+import json
+
 from typing import List, Dict
 
 sys.setrecursionlimit(1000000)
@@ -105,6 +107,7 @@ def client_eval_resample(g_model, client_train_dataset, forward_hook=False):
     if forward_hook:
         activations_dic, handles = register_activation_input_hooks(g_model, 0, 'lora')
 
+    training_args.per_device_eval_batch_size = 8
     c_trainer = SFTTrainer(
         model=g_model,
         tokenizer=tokenizer,
@@ -113,7 +116,8 @@ def client_eval_resample(g_model, client_train_dataset, forward_hook=False):
         train_dataset=None,
         eval_dataset=client_train_dataset,
         formatting_func=formatting_prompts_func,
-        data_collator=data_collator,
+        data_collator=data_collator
+
     )
 
     sample_loss = c_trainer.loss_per_sample_evaluate()
@@ -341,6 +345,9 @@ global_loss = []
 local_compress_flag = [0 for i in range(fed_args.num_clients)]
 rewrite_flag = [0 for i in range(fed_args.num_clients)]
 
+client_round_loss_order = {client: [] for client in range(fed_args.num_clients)}
+
+
 
 for round in tqdm(range(fed_args.num_rounds)):
 
@@ -372,36 +379,51 @@ for round in tqdm(range(fed_args.num_rounds)):
         eval_data = None
 
 
-
-
         if script_args.rewrite:
 
             if local_compress_flag[client] != 1:
                 print('Have not been rewrite')
                 local_compress_flag[client] = 1
 
-            w4w_top_percent = script_args.rewrite_percent
             # if data_downsample:
             loss_list = client_eval_resample(model, training_data, forward_hook=False)
-            t_idx, b_idx = get_top_down_percent_indices(loss_list, w4w_top_percent)
 
-            w4w_data = training_data.select(t_idx)
-            remain_data = training_data.select(b_idx)
+            client_round_loss_order[client].append(loss_list)
 
-            code_rewrite_template = """ Below is an instruction that describes a task along with a reference answer. 
-            Refer to the reference answer, write your own answer in code. Put your answer after "### Your response:" and only show the code part.
-            ### Instruction: {}
-            ### Reference Answer: {}
-            ### Your response:
-            """
+            if script_args.rewrite_top:
+                t_idx, b_idx = get_top_down_percent_indices(loss_list, script_args.rewrite_percent) # descending order
+                w4w_data = training_data.select(t_idx)
+                remain_data = training_data.select(b_idx)
+            else:
+                t_idx, b_idx = get_top_down_percent_indices(loss_list, 1-script_args.rewrite_percent)
+                w4w_data = training_data.select(b_idx)
+                remain_data = training_data.select(t_idx)
+
+            if 'code' in script_args.dataset_name:
+                rewrite_template = """ Below is an instruction that describes a task along with a reference answer. 
+                Refer to the reference answer, write your own answer in code. Put your answer after "### Your response:" and only show the code part.
+                ### Instruction: {}
+                ### Reference Answer: {}
+                ### Your response:
+                """
+            else:
+                rewrite_template = """ Below is an instruction that describes a task along with a reference answer. 
+                Refer to the reference answer, write your own answer. Put your answer after "### Your response:".
+                ### Instruction: {}
+                ### Reference Answer: {}
+                ### Your response:
+                """
+
 
             w4w_data_list = []
             current_data = []
             raw_rewrite_data = []
+            response_data = []
 
             for i in range(len(w4w_data)):
                 # temp_data = rewrite_template.format(training_data[i]['instruction'], training_data[i]['response'], tokenizer.eos_token)
-                temp_data = code_rewrite_template.format(w4w_data[i]['instruction'], w4w_data[i]['response'])
+                temp_data = rewrite_template.format(w4w_data[i]['instruction'], w4w_data[i]['response'])
+                response_data.append(w4w_data[i]['response'])
                 current_data.append(temp_data)
                 w4w_data_list.append(w4w_data[i])
 
@@ -412,16 +434,23 @@ for round in tqdm(range(fed_args.num_rounds)):
 
             print('Start Rewriting')
 
-            bs = 8
+
+            bs = script_args.rewrite_bs  # avoid OOD
             for batch_start_idx in tqdm(range(0, len(current_data), bs)):
+                if batch_start_idx+bs > len(current_data) - 1:
+                    break
                 batched_inputs = temp_tokenizer(current_data[batch_start_idx:batch_start_idx+bs],
-                                           return_tensors='pt', padding=True, truncation=True).to(model.device)
-                batched_outputs = model.generate(batched_inputs.input_ids, max_length=512, early_stopping=True)
+                                           return_tensors='pt', padding=True, truncation=False).to(model.device)
+                response_data_inputs = temp_tokenizer(response_data[batch_start_idx:batch_start_idx+bs],
+                                           return_tensors='pt', padding=True, truncation=False).to(model.device)
+                # m_l = int(scaler * batched_inputs['input_ids'].size()[1])
+                m_n_l = int(script_args.rewrite_scaler * response_data_inputs['input_ids'].size()[1])
+                batched_outputs = model.generate(batched_inputs.input_ids, max_new_tokens=m_n_l)
                 batched_output_str = temp_tokenizer.batch_decode(batched_outputs[:,batched_inputs.data['input_ids'].size(1):], skip_special_tokens=True)
                 raw_rewrite_data.extend(batched_output_str)
                 # break
 
-            for i in range(len(w4w_data_list)):
+            for i in range(len(raw_rewrite_data)):
                 w4w_data_list[i]['response'] = raw_rewrite_data[i]
 
             DATA = Dataset.from_list(w4w_data_list)
@@ -536,7 +565,11 @@ for round in tqdm(range(fed_args.num_rounds)):
         local_dict_list[client] = copy.deepcopy(get_peft_model_state_dict(model))  # deep copy is needed!
         print('Done')
 
-
+    if script_args.rewrite:
+        file_name = 'client_losses_order_dict_{}.json'.format(script_args.rewrite_percent)
+        if not os.path.isfile(file_name):
+            with open(file_name, 'w') as file:
+                json.dump(client_round_loss_order, file)
 
     # ===== Server aggregates the local models =====
     global_dict, global_auxiliary = global_aggregate(
@@ -545,6 +578,21 @@ for round in tqdm(range(fed_args.num_rounds)):
         opt_proxy_dict=opt_proxy_dict, auxiliary_info=(global_auxiliary, auxiliary_delta_dict), overall_drop_rate=0.0
     )
 
+    if (round + 1) % fed_args.vanilla_save_freq == 0:
+        set_peft_model_state_dict(model, global_dict)
+
+        g_trainer = SFTTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            args=training_args,
+            max_seq_length=script_args.seq_length,
+            train_dataset=None,
+            eval_dataset=None,
+            formatting_func=formatting_prompts_func,
+            data_collator=data_collator,
+        )
+        g_trainer.save_model(os.path.join(script_args.output_dir, f"checkpoint-{round + 1}"))
+        del g_trainer
 
     if (round + 1) % fed_args.save_model_freq != 0 :
 
@@ -552,9 +600,9 @@ for round in tqdm(range(fed_args.num_rounds)):
             print('Download Quantization')
             for k, v in global_dict.items():
                 if 'lora_A' in k:
-                    v.data = Q_Deq_SymQ(v, num_bits=8)
+                    v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
                 else:
-                    v.data = Q_Deq_SymQ(v, num_bits=8)
+                    v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
             print('Global-to-Client SymQ and DeSymQ are Done')
 
 
@@ -568,6 +616,9 @@ for round in tqdm(range(fed_args.num_rounds)):
 
         set_peft_model_state_dict(model, global_dict)
 
+        # only evaluate on 4000
+        remain_dataset.select(range(4000))
+
         glo_eval_loss = global_eval_save(model, remain_dataset, forward_hook=False)
         print('global loss:', glo_eval_loss)
         global_loss.append(glo_eval_loss)
@@ -577,9 +628,9 @@ for round in tqdm(range(fed_args.num_rounds)):
             print('Download Quantization')
             for k, v in global_dict.items():
                 if 'lora_A' in k:
-                    v.data = Q_Deq_SymQ(v, num_bits=8)
+                    v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
                 else:
-                    v.data = Q_Deq_SymQ(v, num_bits=8)
+                    v.data = Q_Deq_SymQ(v, num_bits=script_args.q_bit)
             print('Global-to-Client SymQ and DeSymQ are Done')
 
 

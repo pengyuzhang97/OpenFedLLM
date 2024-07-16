@@ -18,15 +18,19 @@ from typing import List
 @dataclass
 class FedArguments:
     fed_alg: Optional[str] = field(default="fedavg", metadata={"help": "the algorithm to use"})
-    num_rounds: Optional[int] = field(default=50, metadata={"help": "the number of rounds"})
+    num_rounds: Optional[int] = field(default=100, metadata={"help": "the number of rounds"})
     num_clients: Optional[int] = field(default=20, metadata={"help": "the number of clients"})    # 20 / 2
     sample_clients: Optional[int] = field(default=2, metadata={"help": "the number of clients to sample"})
-    split_strategy: Optional[str] = field(default="iid", metadata={"help": "the split strategy"})
+    split_strategy: Optional[str] = field(default="iid", metadata={"help": "the split strategy, iid or non-iid"})
     prox_mu: Optional[float] = field(default=0.01, metadata={"help": "the mu parameter of FedProx"})
     fedopt_tau: Optional[float] = field(default=1e-3, metadata={"help": "the tau parameter of FedAdagrad, FedYogi and FedAdam"})
     fedopt_eta: Optional[float] = field(default=1e-3, metadata={"help": "the global learning rate parameter of FedAdagrad, FedYogi and FedAdam"})
     fedopt_beta1: Optional[float] = field(default=0.9, metadata={"help": "the beta1 parameter of FedYogi and FedAdam"})
     fedopt_beta2: Optional[float] = field(default=0.99, metadata={"help": "the beta2 parameter of FedYogi and FedAdam"})
+
+
+
+    vanilla_save_freq: Optional[int] = field(default=5, metadata={"help": "the frequency to save the model excludes global_eval"})
 
     save_model_freq: Optional[int] = field(default=10, metadata={"help": "the frequency to save the model. 50 means save every 50 rounds"})
 
@@ -59,9 +63,9 @@ class ScriptArguments:
 
     optimizer: Optional[str] = field(default="sgd", metadata={"help": "optimizer, default adamw_hf, optional sgd"})
     learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "the learning rate, default 5e-5, fp uses 1 / sqrt(d)"})
-    adam_learning_rate: Optional[float] = field(default=5e-4, metadata={"help": "the learning rate, default 5e-5, fp uses 1 / sqrt(d)"})
+    adam_learning_rate: Optional[float] = field(default=1.5e-4, metadata={"help": "the learning rate, default 5e-5, fp uses 1 / sqrt(d)"})
     # vicuna and a
-    batch_size: Optional[int] = field(default=16, metadata={"help": "the batch size"})
+    batch_size: Optional[int] = field(default=8, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Max Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
@@ -71,8 +75,8 @@ class ScriptArguments:
     use_peft: Optional[bool] = field(default=True, metadata={"help": "whether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
-    peft_lora_r: Optional[int] = field(default=32, metadata={"help": "the r parameter of the LoRA adapters"})   # 8 and 16 is seems to be better
-    peft_lora_alpha: Optional[int] = field(default=64, metadata={"help": "the alpha parameter of the LoRA adapters"}) # vanilla is 16
+    peft_lora_r: Optional[int] = field(default=16, metadata={"help": "the r parameter of the LoRA adapters"})   # 8 and 16 is seems to be better
+    peft_lora_alpha: Optional[int] = field(default=32, metadata={"help": "the alpha parameter of the LoRA adapters"}) # vanilla is 16
 
     # target_modules: List = field(default_factory=lambda: ["q_proj","k_proj", "v_proj"])
 
@@ -97,10 +101,15 @@ class ScriptArguments:
     # use global_forward handles, bool value, on General dataset
     use_glob_fh: Optional[bool] = field(default=False, metadata={"help": "whether to use forward handles"})
 
-
     quantize : Optional[bool] = field(default=False, metadata={"help": "whether to use quantization"})
+    q_bit: Optional[int] = field(default=8, metadata={"help": "quantize to q bit, default 8"})
+
     rewrite : Optional[bool] = field(default=False, metadata={"help": "whether to rewrite"})
+    rewrite_scaler: Optional[float] = field(default=0.5, metadata={"help": "new number of tokens"})
     rewrite_percent: Optional[float] = field(default=0.1, metadata={"help": "percent of the largest losses"})
+    rewrite_top: Optional[bool] = field(default=False, metadata={"help": "rewrite the top losses"})
+    rewrite_bs: Optional[int] = field(default=8, metadata={"help": "be careful of OOD problem"})
+
 
     BP_free: Optional[bool] = field(default=False, metadata={"help": "whether to rewrite"})
 
@@ -228,7 +237,7 @@ def save_config(script_args, fed_args):
             break
         else:
             now_time = (datetime.now() + timedelta(seconds=1)).strftime("%Y%m%d%H%M%S")
-            output_dir = f"{script_args.output_dir}/{dataset_name_split}_{fed_args.fed_alg}_c{fed_args.num_clients}s{fed_args.sample_clients}_i{script_args.max_steps}_b{script_args.batch_size}a{script_args.gradient_accumulation_steps}_l{script_args.seq_length}_{now_time}"
+            output_dir = f"{script_args.output_dir}/{dataset_name_split}_{fed_args.split_strategy}_{fed_args.fed_alg}_c{fed_args.num_clients}s{fed_args.sample_clients}_i{script_args.max_steps}_b{script_args.batch_size}a{script_args.gradient_accumulation_steps}_l{script_args.seq_length}_{now_time}"
 
     script_args.output_dir = output_dir
     with open(os.path.join(script_args.output_dir, "args.json"), "w") as f:

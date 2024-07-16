@@ -17,13 +17,28 @@ def cosine_learning_rate(current_round, total_rounds, initial_lr=0.001, min_lr=0
 
 if __name__ == "__main__":
 
+    import matplotlib.pyplot as plt
+
     # Example usage:
-    num_rounds = 300
-    initial_lr = 5e-5
+    num_rounds1 = 100
+    initial_lr = 1.5e-5
+    num_rounds2 = 50
     min_lr = 1e-6
 
-    lr_list = []
-    for round in range(num_rounds):
-        lr = cosine_learning_rate(round, num_rounds, initial_lr, min_lr)
-        lr_list.append(lr)
-        print(f"Round {round + 1}/{num_rounds}, Learning Rate: {lr:.8f}")
+    lr_list_1 = []
+    lr_list_2 = []
+    for round in range(num_rounds1):
+        lr1 = cosine_learning_rate(round, num_rounds1, initial_lr, min_lr)
+        lr_list_1.append(lr1)
+        print(f"Round {round + 1}/{num_rounds1}, Learning Rate: {lr1:.8f}")
+
+    for round in range(num_rounds2):
+        lr2 = cosine_learning_rate(round, num_rounds2, initial_lr, min_lr)
+        lr_list_2.append(lr2)
+        print(f"Round {round + 1}/{num_rounds2}, Learning Rate: {lr2:.8f}")
+
+
+
+    plt.plot(lr_list_1)
+    plt.plot(lr_list_2)
+    plt.show()
